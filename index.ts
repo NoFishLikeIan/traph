@@ -1,14 +1,21 @@
-function mapValues (obj, fn) {
-  return Object.entries(obj).reduce((acc, [k, v]) => {
-    const r = fn(k, v)
-    if (r === undefined) return
-    acc[k] = r
-    return acc
-  }, {})
+const DATA_ATTRIBUTE = Symbol('TRAPH_DATA_ATTRIBUTE')
+let didWarn: string[] = []
+
+// TODO: multiple generic arity
+type Object<V extends unknown> = {
+  [key: string]: V
 }
 
-let didWarn = []
-function warnOnce (message, ...args) {
+function mapValues<I, O> (
+  obj: Object<I>,
+  fn: (key: string, v: I) => O
+): Object<O> {
+    return Object.entries(obj).reduce<Object<O>>(
+      (acc, [key, value]) => ({...acc, [key]: fn(key, value)}),
+      {})
+  }
+
+function warnOnce (message: string, ...args: unknown[]) {
   if (didWarn.includes(message)) return
   console.warn(message, ...args)
   didWarn.push(message)
@@ -18,25 +25,32 @@ function warnOnce (message, ...args) {
  * A proxy for an Object that checks for existence of the keys,
  * and throws an error in case.
  */
-function checkerProxy (data) {
+function checkerProxy <V>(data: Object<V>): Object<V> {
   if (typeof Proxy === 'undefined') {
     warnOnce("traph: can't validate input data Object, because Proxy global is not defined.")
     return data
   }
+
   return new Proxy(data, {
     get (target, key) {
+      const keyString = key.toString()
       if (key in target) {
-        return target[key]
+        return target[keyString]
       } else {
-        throw new Error(`Data object is missing key '${key}':`)
+        throw new Error(`Data object is missing key '${keyString}':`)
       }
     },
   })
 }
 
-const DATA_ATTRIBUTE = Symbol('TRAPH_DATA_ATTRIBUTE')
+type ParseInputOutput = <I, O>(input: Object<I>, output: Object<O>) => unknown
 
-function buildGettifizeProto (outputTemplate) {
+type Proto = Object<{
+  enumerable: boolean
+  get(): unknown[]
+}>
+
+function buildGettifizeProto <V extends ParseInputOutput>(outputTemplate: Object<V>) {
   const protoDefinitions = mapValues(outputTemplate, (k, fn) => ({
     enumerable: true,
     get () {
@@ -51,8 +65,8 @@ function buildGettifizeProto (outputTemplate) {
   return proto
 }
 
-function buildGettifizeDataBinder (proto) {
-  return function bindData (input) {
+function buildGettifizeDataBinder (proto: Proto) {
+  return function bindData (input: Object<unknown>) {
     // Use a Proxy to check for unexistant keys, only in development
     const inputProxy = process.env.NODE_ENV === 'development' ? checkerProxy(input) : input
     const output = Object.create(proto)
@@ -66,22 +80,22 @@ function buildGettifizeDataBinder (proto) {
  * Transforms an Object of functions of the form (input,output) => outputValue
  * in an Object of auto-memoizing getters deriving from input && output.
  */
-function gettifize (outputTemplate) {
+function gettifize <V extends ParseInputOutput>(outputTemplate: Object<V>) {
   const proto = buildGettifizeProto(outputTemplate)
   const binder = buildGettifizeDataBinder(proto)
   return binder
 }
 
-function materialize (t) {
+function materialize <V extends ParseInputOutput>(t: Object<V>) {
   for (let k in t) {
     void t[k]
   }
   return t
 }
 
-export default function traph (o) {
+export default function traph <V extends ParseInputOutput>(o: Object<V>) {
   const gettifizeDataBinder = gettifize(o)
-  const transform = (i) => materialize(gettifizeDataBinder(i))
-  transform.lazy = (i) => gettifizeDataBinder(i)
+  const transform = (i: Object<unknown>) => materialize(gettifizeDataBinder(i))
+  transform.lazy = (i: Object<unknown>) => gettifizeDataBinder(i)
   return transform
 }
